@@ -1,85 +1,59 @@
-const { ethers } = require('ethers')
-const { abi: IUniswapV3PoolABI } = require('@uniswap/v3-core/artifacts/contracts/interfaces/IUniswapV3Pool.sol/IUniswapV3Pool.json')
-const { abi: SwapRouterABI} = require('@uniswap/v3-periphery/artifacts/contracts/interfaces/ISwapRouter.sol/ISwapRouter.json')
-const { getPoolImmutables, getPoolState } = require('./helpers')
-const ERC20ABI = require('./abi.json')
+const { ethers } = require('ethers');
+const { abi: IUniswapV3PoolABI } = require('@uniswap/v3-core/artifacts/contracts/interfaces/IUniswapV3Pool.sol/IUniswapV3Pool.json');
+const { abi: SwapRouterABI} = require('@uniswap/v3-periphery/artifacts/contracts/interfaces/ISwapRouter.sol/ISwapRouter.json');
+const { getPoolImmutables, getPoolState } = require('./helpers');
+const ERC20ABI = require('./abi.json');
 
-require('dotenv').config()
-const INFURA_URL_TESTNET = process.env.INFURA_URL_TESTNET
-const WALLET_ADDRESS = process.env.WALLET_ADDRESS
-const WALLET_SECRET = process.env.WALLET_SECRET
+require('dotenv').config();
 
-const provider = new ethers.providers.JsonRpcProvider(INFURA_URL_TESTNET) // Ropsten
-const poolAddress = '0x4d1892f15B03db24b55E73F9801826a56d6f0755' // UNI/WETH
-const swapRouterAddress = '0xE592427A0AEce92De3Edee1F18E0157C05861564'
+// Constants
+const {
+  INFURA_URL_TESTNET,
+  WALLET_ADDRESS,
+  WALLET_SECRET,
+} = process.env;
+const POOL_ADDRESS = '0x4d1892f15B03db24b55E73F9801826a56d6f0755'; // UNI/WETH
+const SWAP_ROUTER_ADDRESS = '0xE592427A0AEce92De3Edee1F18E0157C05861564';
 
-const name0 = 'Wrapped Ether'
-const symbol0 = 'WETH'
-const decimals0 = 18
-const address0 = '0xB4FBF271143F4FBf7B91A5ded31805e42b2208d6'
+// Set up provider and wallet
+const provider = new ethers.providers.JsonRpcProvider(INFURA_URL_TESTNET);
+const wallet = new ethers.Wallet(WALLET_SECRET);
+const connectedWallet = wallet.connect(provider);
 
-const name1 = 'Uniswap Token'
-const symbol1 = 'UNI'
-const decimals1 = 18
-const address1 = '0x1f9840a85d5af5bf1d1762f925bdaddc4201f984'
+// Set up contracts
+const poolContract = new ethers.Contract(POOL_ADDRESS, IUniswapV3PoolABI, provider);
+const swapRouterContract = new ethers.Contract(SWAP_ROUTER_ADDRESS, SwapRouterABI, provider);
 
+// Run the main program
 async function main() {
-  const poolContract = new ethers.Contract(
-    poolAddress,
-    IUniswapV3PoolABI,
-    provider
-  )
+  const immutables = await getPoolImmutables(poolContract);
+  const state = await getPoolState(poolContract);
 
-  const immutables = await getPoolImmutables(poolContract)
-  const state = await getPoolState(poolContract)
+  const inputAmount = ethers.utils.parseUnits('0.001', 18);  // 0.001 ETH to Wei
+  const approvalAmount = inputAmount.mul(100000);  // Multiply by 100000
 
-  const wallet = new ethers.Wallet(WALLET_SECRET)
-  const connectedWallet = wallet.connect(provider)
+  const tokenContract = new ethers.Contract(immutables.token0, ERC20ABI, provider);
+  const approvalResponse = await tokenContract.connect(connectedWallet).approve(SWAP_ROUTER_ADDRESS, approvalAmount);
 
-  const swapRouterContract = new ethers.Contract(
-    swapRouterAddress,
-    SwapRouterABI,
-    provider
-  )
-
-  const inputAmount = 0.001
-  // .001 => 1 000 000 000 000 000
-  const amountIn = ethers.utils.parseUnits(
-    inputAmount.toString(),
-    decimals0
-  )
-
-  const approvalAmount = (amountIn * 100000).toString()
-  const tokenContract0 = new ethers.Contract(
-    address0,
-    ERC20ABI,
-    provider
-  )
-  const approvalResponse = await tokenContract0.connect(connectedWallet).approve(
-    swapRouterAddress,
-    approvalAmount
-  )
   console.log('approvalResponse:', approvalResponse);
   console.log('fee:', immutables.fee);
+
   const params = {
     tokenIn: immutables.token1,
     tokenOut: immutables.token0,
     fee: immutables.fee,
     recipient: WALLET_ADDRESS,
     deadline: Math.floor(Date.now() / 1000) + (60 * 10),
-    amountIn: amountIn,
+    amountIn: inputAmount,
     amountOutMinimum: 0,
     sqrtPriceLimitX96: 0,
   }
 
-  const transaction = swapRouterContract.connect(connectedWallet).exactInputSingle(
-    params,
-    {
-      gasLimit: ethers.utils.hexlify(1000000)
-    }
-  ).then(transaction => {
-    console.log(transaction)
-  })
+  const transaction = await swapRouterContract.connect(connectedWallet).exactInputSingle(params, {
+    gasLimit: ethers.utils.hexlify(1000000),
+  });
+
+  console.log(transaction);
 }
 
-main()
+main();
